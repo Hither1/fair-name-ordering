@@ -14,6 +14,8 @@ import zmq
 from collections import Counter
 from typing import Dict, List, Optional
 
+# Using RS code implementation of https://github.com/brownan/Reed-Solomon
+import grandpiper.Reed_Solomon.rs
 
 ####################################################################################################################
 ####################################################################################################################
