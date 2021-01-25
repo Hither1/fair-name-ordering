@@ -8,6 +8,7 @@ from typing import Callable, Optional, Union, List, ByteString
 from grandpiper.config import N, T
 import grandpiper.ed25519 as ed25519
 from grandpiper.ed25519 import Scalar, Point, KeyPair, SecretKey, verify_attached
+from grandpiper.merkle import branch_length, Hash
 
 from hashlib import sha256
 from typing import List, NewType
@@ -265,5 +266,193 @@ class RecoveredShare(Serializeable):
         self.proof = s.read_object(ShareDecryptionProof)
         #self.merkle_branch = s.read_hashes(branch_length(N - 1))
 
+class Phase(enum.IntEnum):
+    Propose = 1
+    Vote = 2
+
+
+class MessageType(enum.IntEnum):
+
+    Propose = enum.auto()
+
+    def to_phase(self):
+        return Phase(min(int(self), 3))
+
 class Block(Serializeable):
-    def __init__(self):
+    encryption_vector: List[Point]
+    witness_vector: List[Point]
+    hash_previous_block: Hash
+
+    def __init__(self, encryption_vector, witness_vector):
+        self.encryption_vector = encryption_vector
+        self.witness_vector = witness_vector
+
+    def set_previous_block_hash(self, block): # to be called by the node
+        self.hash_previous_block = hash(block)
+
+
+@dataclass
+class ProposeMessage(Serializeable):
+    @property
+    def type(self):
+        return MessageType.Propose
+
+    sender: int
+    block: Block
+    certificate_signature: Signature
+
+    def compute_size(self):
+        return 2 * INT_SIZE + self.block.size + 2 * SIGNATURE_SIZE
+
+    def _serialize(self, s: Serializer):
+        s.write_u32(self.type)
+        s.write_u32(self.sender)
+        s.write_object(self.dataset)
+        s.write_signature(self.dataset_header_signature)
+        s.write_signature(self.confirmation_certificate_signature)
+
+    def _deserialize(self, s: Serializer):
+        assert s.read_u32() == self.type
+        self.sender = s.read_u32()
+        self.block = s.read_object(Block)
+        self.dataset_header_signature = s.read_signature()
+        self.confirmation_certificate_signature = s.read_signature()
+
+    @property
+    def round_idx(self):
+        return self.dataset.round_idx
+
+# TODO: finish implementation of VoteMessage
+@dataclass
+class VoteMessage(Serializeable):
+    @property
+    def type(self):
+        return MessageType.Vote
+
+    sender: int
+    block: Block
+    signature: Signature
+    certificate_signature: Signature
+
+    def compute_size(self):
+        return 2 * INT_SIZE + self.block.size + 2 * SIGNATURE_SIZE
+
+    def _serialize(self, s: Serializer):
+        s.write_u32(self.type)
+        s.write_u32(self.sender)
+        s.write_object(self.dataset)
+        s.write_signature(self.signature)
+        s.write_signature(self.certificate_signature)
+
+    def _deserialize(self, s: Serializer):
+        assert s.read_u32() == self.type
+        self.sender = s.read_u32()
+        self.block = s.read_object(Block)
+        self.dataset_header_signature = s.read_signature()
+        self.confirmation_certificate_signature = s.read_signature()
+
+    @property
+    def round_idx(self):
+        return self.block.round_idx
+
+# TODO: finish implementation of VotecertMessage
+@dataclass
+class VotecertMessage(Serializeable):
+    @property
+    def type(self):
+        return MessageType.Votecert
+
+    sender: int
+    block: Block
+    signature: Signature
+    certificate_signature: Signature
+
+    def compute_size(self):
+        return 2 * INT_SIZE + self.block.size + 2 * SIGNATURE_SIZE
+
+    def _serialize(self, s: Serializer):
+        s.write_u32(self.type)
+        s.write_u32(self.sender)
+        s.write_object(self.dataset)
+        s.write_signature(self.signature)
+        s.write_signature(self.certificate_signature)
+
+    def _deserialize(self, s: Serializer):
+        assert s.read_u32() == self.type
+        self.sender = s.read_u32()
+        self.block = s.read_object(Block)
+        self.dataset_header_signature = s.read_signature()
+        self.confirmation_certificate_signature = s.read_signature()
+
+    @property
+    def round_idx(self):
+        return self.dataset.round_idx
+
+Message = Union[ProposeMessage, VoteMessage, VotecertMessage]
+
+@dataclass
+class SignedMessage(Serializeable):
+    @property
+    def type(self):
+        return self.message.type
+
+    message: Message
+    signature: Signature
+
+    def compute_size(self):
+        return self.message.size + SIGNATURE_SIZE
+
+    def _serialize(self, s: Serializer):
+        s.write_object(self.message)
+        s.write_signature(self.signature)
+
+    def _deserialize(self, s: Serializer):
+        msg_type = get_message_type(s.buffer)
+        if msg_type == MessageType.Propose:
+            self.message = s.read_object(ProposeMessage)
+        elif msg_type == MessageType.Acknowledge:
+            self.message = s.read_object(Message)
+        elif msg_type == MessageType.Confirm:
+            self.message = s.read_object(Message)
+        elif msg_type == MessageType.Recover:
+            self.message = s.read_object(Message)
+        else:
+            raise ValueError("invalid message type")
+        self.signature = s.read_signature()
+
+    def verify_signature(self, public_key):
+        return verify_attached(self.serialized, public_key)
+
+@dataclass
+class NodeInfo:
+    id: int
+    address: str
+    port: int
+    keypair: Optional[KeyPair]
+    public_key: Point
+    initial_secret: Scalar
+    initial_shares: List[Point]
+    initial_proof: ShareCorrectnessProof
+    initial_merkle_root: List[Hash]
+
+# A certificate should consist of a list of votes from t+1 distinct honest nodes
+class Certificate(Serializeable):
+    block: Block
+    signer: List[int]
+    signatures: List[Signature]
+    #def __init__(self):
+
+
+def get_message_type(data):
+    return MessageType(struct.unpack_from("I", data, offset=0)[0])
+
+
+def get_message_sender(data):
+    s = struct.unpack_from("I", data, offset=4)[0]
+    if 0 <= s < N:
+        return s
+    raise ValueError(f"Invalid message sender id {s} (N={N})!")
+
+
+def get_message_round(data):
+    return struct.unpack_from("I", data, offset=8)[0]

@@ -10,7 +10,8 @@ from . import fe
 
 # path to the share library file libsodium
 # we require a custom version which also exports the function crypto_core_ed25519_scalar_mul
-LIBSODIUM_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "../..", "..", "lib", "custom-libsodium.so"))
+# LIBSODIUM_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "../..", "lib", "custom-libsodium.so"))
+LIBSODIUM_PATH = os.path.join(os.path.dirname(__file__), "../../lib/libsodium.dylib")
 
 BYTE_ORDER = "little"
 FIELD_MODULUS = 2 ** 255 - 19
@@ -35,6 +36,7 @@ def load_libsodium():
         assert ok, f"Invalid libsodium version {sodium_version}, version {required_version} or newer is required!"
 
     version_check("1.0.17")
+    print("load libsodium successful")
     return lib
 
 

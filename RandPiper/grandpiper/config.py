@@ -6,11 +6,13 @@ import os
 import sys
 import subprocess
 import time
+import random
 from datetime import datetime, timezone
 from typing import Optional, List
 
 import grandpiper.cliconfig
 from grandpiper.ed25519 import Point, Scalar, KeyPair
+import grandpiper.pvss as pvss
 
 N = 7  # Total number of nodes
 T = math.ceil(N / 3)  # Maximum # of allowed byzantine nodes
@@ -128,7 +130,7 @@ def print_info():
     print()
     print("=" * 60)
     print()
-    print(f"  HYDRAND NODE")
+    print(f"  GRANDPIPER NODE")
     print()
     print(f"  node id:    {NODE_ID: >5}")
     print(f"  process id: {os.getpid(): >5}")
@@ -177,6 +179,9 @@ def load_config(n=None):
 
     addresses, ports = load_network_config()
     node_infos = []
+
+
+    #
     for node_id in range(n):
         if MODE == "testing" or NODE_ID == node_id:
             with open(os.path.join(CONFIG_DIR, f"{node_id:03}.secret_key"), "rb") as f:
@@ -204,6 +209,20 @@ def load_config(n=None):
             NodeInfo(node_id, addresses[node_id], ports[node_id], keypair,
                      public_key, initial_secret, shares, proof, merkle_root)
         )
+
+        # randomly select the leaders of last t rounds (hypothetical, before the start of the protocol)
+        prev_leaders_list = list(random.sample(n, T))
+
+        # randomly select beacon values of last t rounds and the current (e = 1)
+        for pre_round in range(T + 1):
+            l = prev_leaders_list[pre_round]
+            new_shared_secret, encrypted_shares, proof = pvss.share_random_secret([info.public_key for info in node_infos].remove(node_infos[l].public_key), T)
+            for i in range():
+                if i == l:
+                    continue
+                node_infos[i].
+
+
     return node_infos
 
 
@@ -211,8 +230,8 @@ def generate_sample_config(n=None, write_to_disk=False):
     if n is None:
         n = N
 
-    from hydrand import merkle, pvss
-    from hydrand.data import NodeInfo
+    from grandpiper import merkle, pvss
+    from grandpiper.data import NodeInfo
 
     addresses, ports = load_network_config()
     node_infos = []
@@ -254,7 +273,7 @@ def save_config(node_infos):
 
 
 logging.basicConfig(level=DEFAULT_LOG_LEVEL)
-logging.debug(f"use cli config: {hydrand.cliconfig.USE_CLI_CONFIG}")
+logging.debug(f"use cli config: {grandpiper.cliconfig.USE_CLI_CONFIG}")
 
 if NETWORK_CONFIG == 'amazon':
     logging.debug("loading parameter for N and NODE_ID from amazon network config")
@@ -271,7 +290,7 @@ if NETWORK_CONFIG == 'amazon':
 
     logging.debug(f"loaded parameters: N={N}, NODE_ID={NODE_ID}")
 
-if hydrand.cliconfig.USE_CLI_CONFIG:
+if grandpiper.cliconfig.USE_CLI_CONFIG:
     parse_cli_arguments()
     print_info()
 
