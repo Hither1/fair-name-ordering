@@ -16,7 +16,7 @@ from typing import Dict, List, Optional
 
 # Using RS code implementation of https://github.com/brownan/Reed-Solomon
 # import grandpiper.Reed_Solomon.rs
-
+from grandpiper import merkle
 from grandpiper.ed25519 import Scalar, Point, KeyPair
 import grandpiper.pvss as pvss
 import grandpiper.ed25519 as ed25519
@@ -157,6 +157,7 @@ class Node:
         self._shares_for_recovery = [{}]
         self.sent_messages = []
         self._message_queue = []
+        self._failed_nodes = [] # each time a node is deemed byzantine, it is added to this set
 
 
     def run(self):
@@ -329,9 +330,9 @@ class Node:
 
     def compute_leader(self):
         R = int.from_bytes(self.prev_beacon, "little")
-        rn = self._recovered_nodes(self.last_confirmed_round)
+        rn = self._failed_nodes
         P = {i: None for i in range(N)}  # make use of the fact that dicts are ordered in python now
-        prev_leaders = self.leaders[max(1, self.round - F):self.round]
+        prev_leaders = self.leaders[max(1, self.round - T):self.round]
 
         self.logger.debug("running leader selection: excluding previous leaders %s", prev_leaders)
         for x in prev_leaders:
@@ -349,20 +350,20 @@ class Node:
         if self.is_leader:
             self.logger.info("THIS NODE IS LEADER for this round (%d)", self.round)
 
+    '''
     @functools.lru_cache(maxsize=1000)
-    def _recovered_nodes(self, x: int):
+    def _failed_nodes(self, x: int):
         """ helper function rn(Dx) to recursively compute the set of recovered nodes from the view of a dataset
         """
         if x == 0:
             return set()
-        Dx = self.datasets[x]
-        assert Dx is not None
+
         xprev = Dx.prev_round_idx
         if xprev == x - 1:
             # no recovery certificates
             return self._recovered_nodes(xprev)
         return self._recovered_nodes(xprev) | {self.leaders[r] for r in range(xprev + 1, x)}
-
+    '''
     ####################################################################################################################
     # END LEADER SELECTION
     ####################################################################################################################
@@ -372,10 +373,6 @@ class Node:
     ####################################################################################################################
     # BEGIN DATASTORE ITEMS
     ####################################################################################################################
-
-    @property
-    def dataset(self):
-        return self.datasets[self.round]
 
     @property
     def propose_message(self):
@@ -444,7 +441,7 @@ class Node:
                 lambda: block.serialized_header, self.KEYPAIR.secret_key
             ),
             vote_certificate_signature=Signature.create_later(
-                lambda: Message(self.ID, self.round, dataset.header_digest).serialize(),
+                lambda: Message(self.ID, self.round, ).serialize(),
                 self.KEYPAIR.secret_key
             ),
         )
@@ -473,14 +470,15 @@ class Node:
         self.acknowlegde_messages[self.ID] = msg
 
     def enqueue(self, block_content): # block_content should be a vector containing 2 vectors
-        self.enc_wit_queues[leader].append()
+        self.encrypted_shares_queue[self.leader].append()
+        self.witnesses_queue[self.leader].append()
 
 
-    def dequeue(self):
-        encryption_vector = self.enc_wit_queues[]
-        witness_vector =
+    def dequeue(self): # to be used for reconstruction
+        encryption_vector = self.encrypted_shares_queue[self.leader].pop(0)
+        witness = self.witnesses_queue[self.leader].pop(0)
 
-        return encryption_vector, witness_vector
+        return encryption_vector, witness
 
     def lookup_share_for_reconstruction(self) -> Optional[RecoveredShare]:
         prev_round_with_same_leader = self.round - 1
@@ -491,16 +489,12 @@ class Node:
         if prev_round_with_same_leader == 0:
             prev_enc_shares = NODE_INFOS[self.leader].initial_shares
         else:
-            prev_dataset = self.datasets[prev_round_with_same_leader]
-            if prev_dataset is None or not isinstance(prev_dataset, Dataset):
-                # we do not have the dataset at all, or only the header
-                return None
-            prev_enc_shares = prev_dataset.encrypted_shares
+
 
         share_idx = self.ID if self.ID < self.leader else self.ID - 1
         encrypted_share = prev_enc_shares[share_idx]
         decrypted_share = pvss.decrypt_share(encrypted_share, self.KEYPAIR.secret_scalar)
-        proof = grandpiper.pvss.prove_share_decryption(
+        proof = pvss.prove_share_decryption(
             decrypted_share, encrypted_share, self.KEYPAIR.secret_scalar, self.KEYPAIR.public_key
         )
         # TODO: check if hashing of s.value is required
@@ -671,7 +665,7 @@ class Node:
             if not merkle.verify_branch(rs.merkle_branch, root_hash, share_idx, N - 1):  # type: ignore
                 return
 
-            if not grandpiper.pvss.verify_decrypted_share(rs.share, enc_share, NODE_INFOS[msg.sender].public_key,
+            if not pvss.verify_decrypted_share(rs.share, enc_share, NODE_INFOS[msg.sender].public_key,
                                                           rs.proof):
                 self.flag_adversary(msg.sender)
                 return
@@ -685,17 +679,19 @@ class Node:
         else:
             self.logger.warning("RECOVER MESSAGE DID NOT INCLUDE A SHARE")
 
+    '''
     def lookup_merkle_root(self) -> Hash:
         prev_round_with_same_leader = self.round - 1
         while prev_round_with_same_leader > 0 and self.leaders[prev_round_with_same_leader] != self.leader:
             prev_round_with_same_leader -= 1
 
         if prev_round_with_same_leader == 0:
-            return NODE_INFOS[self.leader].initial_merkle_root
+            return NODE_INFOS[self.leader].
 
         dataset = self.datasets[prev_round_with_same_leader]
         assert dataset, "there must be at least a dataset header at this point"
         return dataset.merkle_root
+    '''
 
     def create_certificate(self, dataset_header_digest: Hash):
         cc = Certificate(dataset_header_digest, [], [])
@@ -717,7 +713,7 @@ class Node:
             else:
                 share_id = node_id
             indexed_shares.append((share_id, share))
-        return grandpiper.pvss.recover(indexed_shares)
+        return pvss.recover(indexed_shares)
 
     ####################################################################################################################
     # END PROCESSING OF INCOMMING MESSAGES
@@ -759,7 +755,7 @@ class Node:
         #       was previously added to the queue.
 
         # Drop messages with invalid signatures
-        if not grandpiper.ed25519.verify_attached(msg, NODE_INFOS[msg_sender].public_key):
+        if not ed25519.verify_attached(msg, NODE_INFOS[msg_sender].public_key):
             return ValueError("Signature check failed!")
 
         return True
@@ -788,7 +784,7 @@ class Node:
         else:
             proof = NODE_INFOS[self.leader].initial_proof
 
-        return proof is not None and grandpiper.pvss.verify_secret(revealed_secret, proof.commitments, T)
+        return proof is not None and pvss.verify_secret(revealed_secret, proof.commitments, T)
 
     ####################################################################################################################
     # END VERFICIATION
@@ -845,15 +841,14 @@ class Node:
         self._phase = Phase.Propose
         self._t_round_start += ROUND_DURATION
         self._t_round_end = self._t_round_start + ROUND_DURATION
-        self._t_ack_phase_start = self._t_round_start + PROPOSE_PHASE_DURATION
-        self._t_vote_phase_start = self._t_ack_phase_start + ACKNOWLEDGE_PHASE_DURATION
+        self._t_vote_phase_start =
 
         self.beacons.append(None)
         self.confirmation_certificates.append(None)
         self.recovery_certificates.append(None)
         self.leaders.append(None)
         self.revealed_secrets.append(None)
-        self.datasets.append(None)
+
         self.propose_messages.append(None)
 
         self._acknowlegde_messages.append({})
@@ -897,9 +892,9 @@ class Node:
             Returns at most config.MAX_TIMEOUT to allow for proper termination (keep alive tick).
         """
         if self.phase == Phase.Propose:
-            timeout = max(self._t_ack_phase_start - self.actual_time(), 0)
-        elif self.phase == Phase.Acknowledge:
             timeout = max(self._t_vote_phase_start - self.actual_time(), 0)
+        elif self.phase == Phase.Acknowledge:
+            timeout = max(self._t_vote_cert_phase_start - self.actual_time(), 0)
         else:
             timeout = max(self._t_round_end - self.actual_time(), 0)
 

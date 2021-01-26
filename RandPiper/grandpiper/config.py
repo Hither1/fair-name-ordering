@@ -181,51 +181,49 @@ def load_config(n=None):
     node_infos = []
 
 
-    #
+    # Reading from the files to get the and initial shares and proof
     for node_id in range(n):
         if MODE == "testing" or NODE_ID == node_id:
             with open(os.path.join(CONFIG_DIR, f"{node_id:03}.secret_key"), "rb") as f:
                 keypair = KeyPair(f.read())
             public_key = keypair.public_key
-            with open(os.path.join(CONFIG_DIR, f"{node_id:03}.initial_secret"), "rb") as f:
-                initial_secret = Scalar.from_bytes(f.read())
+            secrets = []
+            for t in range(T):
+                with open(os.path.join(CONFIG_DIR, f"{node_id:03}.secrets"), "rb") as f:
+                    secret = Scalar.from_bytes(f.read())
+                    secrets.append(secret)
         else:
             keypair = None
             initial_secret = None
             with open(os.path.join(CONFIG_DIR, f"{node_id:03}.public_key"), "rb") as f:
                 public_key = Point.from_bytes(f.read())
 
-        with open(os.path.join(CONFIG_DIR, f"{node_id:03}.initial_pvss_shares"), "rb") as f:
-            shares = [Point.from_bytes(f.read(32)) for i in range(n - 1)]
-        with open(os.path.join(CONFIG_DIR, f"{node_id:03}.initial_pvss_proof"), "rb") as f:
-            proof = ShareCorrectnessProof(
-                commitments=[Point.from_bytes(f.read(32)) for i in range(n - 1)],
-                challenge=Scalar.from_bytes(f.read(32)),
-                responses=[Scalar.from_bytes(f.read(32)) for i in range(n - 1)],
-            )
+        with open(os.path.join(CONFIG_DIR, f"{node_id:03}.pvss_shares"), "rb") as f:
+            # f.read(32) means read at most 32 bytes from the file
+            # Repeat for t + 1 times: the t (fake) previous rounds and e = 1
+            for t in range(T):
+                shares = [Point.from_bytes(f.read(32)) for i in range(n - 1)]
+        with open(os.path.join(CONFIG_DIR, f"{node_id:03}.pvss_proof"), "rb") as f:
+            # Repeat for t + 1 times: the t (fake) previous rounds and e = 1
+            for t in range(T):
+                proof = ShareCorrectnessProof(
+                    commitments=[Point.from_bytes(f.read(32)) for i in range(n - 1)],
+                    challenge=Scalar.from_bytes(f.read(32)),
+                    responses=[Scalar.from_bytes(f.read(32)) for i in range(n - 1)],
+                )
 
         merkle_root = merkle.compute_root([merkle.Hash(bytes(es)) for es in shares])
         node_infos.append(
             NodeInfo(node_id, addresses[node_id], ports[node_id], keypair,
-                     public_key, initial_secret, shares, proof, merkle_root)
+                     public_key, secrets, shares, proof)
         )
 
-        # randomly select the leaders of last t rounds (hypothetical, before the start of the protocol)
-        prev_leaders_list = list(random.sample(n, T))
-
-        # randomly select beacon values of last t rounds and the current (e = 1)
-        for pre_round in range(T + 1):
-            l = prev_leaders_list[pre_round]
-            new_shared_secret, encrypted_shares, proof = pvss.share_random_secret([info.public_key for info in node_infos].remove(node_infos[l].public_key), T)
-            for i in range():
-                if i == l:
-                    continue
-                node_infos[i].
 
 
     return node_infos
 
 
+# Generating configuration
 def generate_sample_config(n=None, write_to_disk=False):
     if n is None:
         n = N
@@ -237,14 +235,29 @@ def generate_sample_config(n=None, write_to_disk=False):
     node_infos = []
     t = math.ceil(n / 3)
     keypairs = [KeyPair.random() for node_id in range(n)]
+
     for node_id, keypair in enumerate(keypairs):
-        receiver_pks = [kp.public_key for j, kp in enumerate(keypairs) if j != node_id]
-        secret, shares, proof = pvss.share_random_secret(receiver_pks, t)
-        merkle_root = merkle.compute_root([merkle.Hash(bytes(es)) for es in shares])
+
         node_infos.append(
-            NodeInfo(node_id, addresses[node_id], ports[node_id], keypair, keypair.public_key,
-                     secret, shares, proof, merkle_root)
+            NodeInfo(node_id, addresses[node_id], ports[node_id], keypair, keypair.public_key, [[[]]], [[]])
         )
+
+    # randomly select the leaders of last t rounds (hypothetical, before the start of the protocol)
+    prev_leaders_list = list(random.sample(n, T))
+
+    # randomly select beacon values of last t rounds and the current (e = 1)
+    for pre_round in range(T + 1):
+        l = prev_leaders_list[pre_round]
+        receiver_pks = [kp.public_key for j, kp in enumerate(keypairs) if j != l]
+        secret, shares, proof = pvss.share_random_secret(receiver_pks, t)
+
+        for node_id, keypair in enumerate(keypairs):
+            if i == l:
+                continue
+            node_infos[node_id].secrets[l].append(secret)
+            node_infos[node_id].encrypted_shares_queue[l].append(shares)
+            node_infos[node_id].witnesses_queue[l].append(proof)
+
     if write_to_disk:
         save_config(node_infos)
     return node_infos
@@ -259,17 +272,23 @@ def save_config(node_infos):
             f.write(node_info.keypair.seed)
         with open(os.path.join(CONFIG_DIR, f"{node_id:03}.public_key"), "wb") as f:
             f.write(node_info.public_key.value)
-        with open(os.path.join(CONFIG_DIR, f"{node_id:03}.initial_secret"), "wb") as f:
-            f.write(node_info.initial_secret.value)
-        with open(os.path.join(CONFIG_DIR, f"{node_id:03}.initial_pvss_shares"), "wb") as f:
-            for share in node_info.initial_shares:
-                f.write(share.value)
-        with open(os.path.join(CONFIG_DIR, f"{node_id:03}.initial_pvss_proof"), "wb") as f:
-            for c in node_info.initial_proof.commitments:
-                f.write(c.value)
-            f.write(node_info.initial_proof.challenge.value)
-            for r in node_info.initial_proof.responses:
-                f.write(r.value)
+
+        # Queues
+        with open(os.path.join(CONFIG_DIR, f"{node_id:03}.secrets"), "wb") as f:
+            for t in range(T):
+                f.write(node_info.initial_secret.value)
+        with open(os.path.join(CONFIG_DIR, f"{node_id:03}.pvss_shares"), "wb") as f:
+            for i in range(N):
+                for share in node_info.encrypted_shares_queue[i]:
+                    f.write(share.value)
+        with open(os.path.join(CONFIG_DIR, f"{node_id:03}.pvss_proofs"), "wb") as f:
+            # loop through the queues kept for each node
+            for i in range(N):
+                for c in node_info.witnesses_queue.commitments:
+                    f.write(c.value)
+                f.write(node_info.witnesses_queue.challenge.value)
+                for r in node_info.witnesses_queue.responses:
+                    f.write(r.value)
 
 
 logging.basicConfig(level=DEFAULT_LOG_LEVEL)

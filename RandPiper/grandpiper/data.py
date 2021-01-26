@@ -12,6 +12,7 @@ from grandpiper.merkle import branch_length, Hash
 
 from hashlib import sha256
 from typing import List, NewType
+
 Hash = NewType("Hash", bytes)
 
 INT_SIZE = 4
@@ -22,7 +23,6 @@ SIGNATURE_SIZE = 64
 
 MIN_MESSAGE_SIZE = 4 + 4 + 4 + 64
 MAX_MESSAGE_SIZE = 1024 ** 2
-
 
 
 @dataclass
@@ -64,6 +64,7 @@ class Serializeable:
     def _deserialize(self, s: "Serializer"):
         raise NotImplementedError
 
+
 class Signature(Serializeable):
     def __init__(self, buffer: Optional[bytearray]):
         super().__init__()
@@ -100,8 +101,8 @@ class Signature(Serializeable):
     def __repr__(self):
         return f"Signature({repr(bytes(self._serialized))})"
 
-class Serializer:
 
+class Serializer:
     offset: int
     buffer: bytearray
     view: memoryview
@@ -210,9 +211,9 @@ class Serializer:
         obj._serialized = self.view[start: self.offset]
         return obj
 
+
 @dataclass
 class ShareCorrectnessProof(Serializeable):
-
     commitments: List[Point]
     challenge: Scalar
     responses: List[Scalar]
@@ -229,9 +230,9 @@ class ShareCorrectnessProof(Serializeable):
         self.challenge = s.read_scalar()
         self.responses = s.read_scalars(N - 1)
 
+
 @dataclass
 class ShareDecryptionProof(Serializeable):
-
     challenge: Scalar
     response: Scalar
 
@@ -248,7 +249,6 @@ class ShareDecryptionProof(Serializeable):
 
 @dataclass
 class RecoveredShare(Serializeable):
-
     share: Point
     proof: ShareDecryptionProof
     merkle_branch: List[Hash]
@@ -259,12 +259,13 @@ class RecoveredShare(Serializeable):
     def _serialize(self, s: Serializer):
         s.write_point(self.share)
         s.write_object(self.proof)
-        #s.write_hashes(self.merkle_branch)
+        # s.write_hashes(self.merkle_branch)
 
     def _deserialize(self, s: Serializer):
         self.share = s.read_point()
         self.proof = s.read_object(ShareDecryptionProof)
-        #self.merkle_branch = s.read_hashes(branch_length(N - 1))
+        # self.merkle_branch = s.read_hashes(branch_length(N - 1))
+
 
 class Phase(enum.IntEnum):
     Propose = 1
@@ -272,11 +273,11 @@ class Phase(enum.IntEnum):
 
 
 class MessageType(enum.IntEnum):
-
     Propose = enum.auto()
 
     def to_phase(self):
         return Phase(min(int(self), 3))
+
 
 class Block(Serializeable):
     encryption_vector: List[Point]
@@ -287,7 +288,7 @@ class Block(Serializeable):
         self.encryption_vector = encryption_vector
         self.witness_vector = witness_vector
 
-    def set_previous_block_hash(self, block): # to be called by the node
+    def set_previous_block_hash(self, block):  # to be called by the node
         self.hash_previous_block = hash(block)
 
 
@@ -322,6 +323,7 @@ class ProposeMessage(Serializeable):
     def round_idx(self):
         return self.dataset.round_idx
 
+
 # TODO: finish implementation of VoteMessage
 @dataclass
 class VoteMessage(Serializeable):
@@ -354,6 +356,7 @@ class VoteMessage(Serializeable):
     @property
     def round_idx(self):
         return self.block.round_idx
+
 
 # TODO: finish implementation of VotecertMessage
 @dataclass
@@ -388,7 +391,9 @@ class VotecertMessage(Serializeable):
     def round_idx(self):
         return self.dataset.round_idx
 
+
 Message = Union[ProposeMessage, VoteMessage, VotecertMessage]
+
 
 @dataclass
 class SignedMessage(Serializeable):
@@ -423,6 +428,7 @@ class SignedMessage(Serializeable):
     def verify_signature(self, public_key):
         return verify_attached(self.serialized, public_key)
 
+
 @dataclass
 class NodeInfo:
     id: int
@@ -430,17 +436,18 @@ class NodeInfo:
     port: int
     keypair: Optional[KeyPair]
     public_key: Point
-    initial_secret: Scalar
-    initial_shares: List[Point]
-    initial_proof: ShareCorrectnessProof
-    initial_merkle_root: List[Hash]
+    secrets: List[Scalar]  # store the secrets of last t rounds
+    # According to the paper, the following 2 queues should be combined into one queue
+    encrypted_shares_queue: List[List[List[Point]]]  # store the encrypted secret shares
+    witnesses_queue: List[List[ShareCorrectnessProof]]
+
 
 # A certificate should consist of a list of votes from t+1 distinct honest nodes
 class Certificate(Serializeable):
     block: Block
     signer: List[int]
     signatures: List[Signature]
-    #def __init__(self):
+    # def __init__(self):
 
 
 def get_message_type(data):
