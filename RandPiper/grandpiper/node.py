@@ -1053,6 +1053,9 @@ class Node:
     ####################################################################################################################
     ####################################################################################################################
 
+    def detect_equivocation(self):
+        
+
     def flag_adversary(self, node_id: int):
         if self.node_status[node_id] != NodeStatus.ADVERSARIAL:
             self.node_status[node_id] = NodeStatus.ADVERSARIAL
